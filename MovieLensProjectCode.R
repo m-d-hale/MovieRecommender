@@ -1,9 +1,13 @@
 
 ## Movie Recommendation Engine Project **
 
-######################################################################################
-# Create edx and final_holdout_test sets and save to rdas folder in working directory
-######################################################################################
+#########################################
+# Create edx and final_holdout_test sets 
+#########################################
+
+#install latex
+tinytex::install_tinytex()
+
 
 #0. Initial production of edx (training set) and final_holdout_test (test set) provided by the course
 
@@ -69,29 +73,140 @@ edx <- rbind(edx, removed)
 rm(dl, ratings, movies, test_index, temp, movielens, removed)
 
 #save processed sets to rdas folder
-save(edx, file='rdas/edx.rda')
-save(final_holdout_test, file='rdas/final_holdout_test.rda')
+#save(edx, file='rdas/edx.rda')
+#save(final_holdout_test, file='rdas/final_holdout_test.rda')
 
 
-#####################
+#############################
+# Initial Data Exploration
+#############################
 
 
+library(dplyr)
+
+
+
+
+#Take a look at datasets
+nrow(edx)
+ncol(edx)
+head(edx)
+
+
+#Produce list of variables in the edx dataset (and test set), with type and sample entries
+edx_rnd <- edx %>% slice_sample(n=10) 
+tmp <- capture.output(str(edx_rnd))
+tmp2 <- data.frame(tmp[2:length(tmp)])
+colnames(tmp2) <- c("AllInfo")
+tmp3 <- tmp2 %>% separate(col="AllInfo",into=c("v1","v2"),sep=":") %>% 
+  mutate(Variable = substr(v1,3,nchar(v1)),
+         Type = substr(v2,2,4),
+         Examples = substr(v2,6,100)) %>%
+  select(Variable,Type, Examples)
+tmp3 %>% knitr::kable()
+
+#Just look at Id 1 so can see quickly load data in the environment window
+edx_small <- edx %>% filter(userId == 1)
+
+#Counts of each rating level
+cntsbyrating <- edx %>% group_by(rating) %>% summarize(n = n())
+cntsbyrating
+sum(cntsbyrating$n) #check not lost any
+
+#count distinct user and movies
+edx %>% summarize(users = n_distinct(userId),
+                  movies = n_distinct(movieId))
+
+#count reviews per genre
+cntsbygenre <- edx %>% 
+  mutate(Drama_bin = grepl("Drama", genres, fixed = TRUE),
+         Comedy_bin = grepl("Comedy", genres, fixed = TRUE),
+         Thriller_bin = grepl("Thriller", genres, fixed = TRUE),
+         Romance_bin = grepl("Romance", genres, fixed = TRUE)
+  )
+sum(cntsbygenre$Drama_bin)
+sum(cntsbygenre$Comedy_bin)
+sum(cntsbygenre$Thriller_bin)
+sum(cntsbygenre$Romance_bin)
+
+#Get review counts for some chosen films
+cntsfilms <- edx %>% mutate(Frst = as.numeric(grepl("Forrest Gump", title, fixed = TRUE)),
+                            Jrp = as.numeric(grepl("Jurassic Park", title, fixed = TRUE)),
+                            Plp = as.numeric(grepl("Pulp Fiction", title, fixed = TRUE)),
+                            Shr = as.numeric(grepl("The Shawshank Redemption", title, fixed = TRUE)),
+                            Spe = as.numeric(grepl("Speed 2: Cruise Control", title, fixed = TRUE))) %>%
+  mutate(chosenpic = Frst + Jrp + Plp + Shr + Spe) %>% filter(chosenpic == 1) %>% group_by(title) %>% summarize(n=n())
+cntsfilms
+
+#Get rating counts ordered by vol
+cntsbyrating2 <- arrange(cntsbyrating,desc(n))
+cntsbyrating2
+
+#List the most reviewed movies
+
+
+#List the least reviewed movies
+
+#Get total number of genres, and counts of each. Order by most reviewed
+
+
+#sample table for a few users, showing whether they've rated each of the top 5 movies.
+keep <- edx %>%
+  dplyr::count(movieId) %>%
+  top_n(5) %>%
+  pull(movieId)
+tab <- edx %>%
+  filter(userId %in% c(13:20)) %>% 
+  filter(movieId %in% keep) %>% 
+  select(userId, title, rating) %>% 
+  spread(title, rating)
+tab %>% knitr::kable()
+
+
+#Produce example matrix of 100 random users and which films reviewed, to see coverage
+users <- sample(unique(edx$userId), 100)
+edx %>% filter(userId %in% users) %>% 
+  select(userId, movieId, rating) %>%
+  mutate(rating = 1) %>%
+  spread(movieId, rating) %>% select(sample(ncol(.), 100)) %>% 
+  as.matrix() %>% t(.) %>%
+  image(1:100, 1:100,. , xlab="Movies", ylab="Users")
+abline(h=0:100+0.5, v=0:100+0.5, col = "grey")
+
+
+#Highest ranked films
+#Highest ranked genres
+
+
+#summary of the data
+summary(edx)
+
+tmp2 <- dput(edx_rnd)
+
+
+
+#############################
+# Data Analysis
+#############################
+
+
+
+#############################
+# Training ML algos
+#############################
+
+
+
+
+#############################
+# Testing best ML algo
+#############################
 
 
 
 print(nrow(edx))
 cat("Number of rows in training set edx =",nrow(edx))
 print(paste0("Current working dir: ", wd))
-?
 
-## 1. Data Cleaning and Processing ##
 
-## Data Exploration ##
-
-## Visualisation ##
-
-## Model Training ##
-
-## Model Performance on Test Set ##
-#Note, single best model based on training should be used for this only, not all models tried
 

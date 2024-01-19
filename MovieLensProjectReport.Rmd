@@ -77,7 +77,7 @@ rm(dl, ratings, movies, test_index, temp, movielens, removed)
 ### Describe the dataset and summarizes the goal of the project and key steps that were performed
 
 ### 1a) Project Objective
-MovieLens.org is a website that asks users to rate movies they've watched from 0-5 stars, and based on that information will provide recommendations of other movies that user might like to watch
+MovieLens.org is a website that asks users to rate movies they've watched from 0.5 to 5 stars, and based on that information will provide recommendations of other movies that user might like to watch
 
 To provide these recommendations a Machine Learning algorithm has been trained to predict the star rating a user will give to a specific movie, and return the movies with the highest predicted star ratings as recommendations.
 
@@ -102,8 +102,20 @@ cat("Number of rows in training set edx =",nrow(edx))
 cat("Number of rows in test set final_holdout_test =",nrow(final_holdout_test))
 ```
 
-The columns in the two sets are per the below:
+The 6 columns in the training and test datasets are per the below, listing the data type in each column and some sample entries:
 
+```{r, echo=FALSE}
+edx_rnd <- edx %>% slice_sample(n=10) 
+tmp <- capture.output(str(edx_rnd))
+tmp2 <- data.frame(tmp[2:length(tmp)])
+colnames(tmp2) <- c("AllInfo")
+tmp3 <- tmp2 %>% separate(col="AllInfo",into=c("v1","v2"),sep=":") %>% 
+  mutate(Variable = substr(v1,3,nchar(v1)),
+         Type = substr(v2,2,4),
+         Examples = substr(v2,6,100)) %>%
+  select(Variable,Type, Examples)
+tmp3 %>% knitr::kable()
+```
 
 
 
@@ -116,6 +128,48 @@ The final, selected model will then be applied to the final_holdout_test set, an
 
 ## 2. Analysis
 explains the process and techniques used, including data cleaning, data exploration and visualization, insights gained, and your modeling approach
+
+This section covers the exploratory data analysis carried out and associated findings.
+
+
+### 2.1 Data sparseness
+An initial plot of 100 randomly selected users, and the coverage of films they've reviewed suggests a sparse matrix, with each user unsurprisingly having only reviewed a small minority of the overall movies available.
+
+```{r, echo=FALSE}
+users <- sample(unique(edx$userId), 100)
+edx %>% filter(userId %in% users) %>% 
+  select(userId, movieId, rating) %>%
+  mutate(rating = 1) %>%
+  spread(movieId, rating) %>% select(sample(ncol(.), 100)) %>% 
+  as.matrix() %>% t(.) %>%
+  image(1:100, 1:100,. , xlab="Movies", ylab="Users")
+abline(h=0:100+0.5, v=0:100+0.5, col = "grey")
+
+```
+
+### 2.2 Highest/Lowest Rated Movies and Most/Least Frequently Reviewed Movies
+
+
+Would expect the weakest algo performance for the movies with the least reviews
+
+### 2.3 Highest/Lowest Rated Genres and distribution of vol of reviews for each genre (chart)
+
+Would expect the weakest algo performance for the genres with the least reviews
+
+
+### 2.4 Movies by Year; distribution of reviews
+
+### 2.5 Timestamps of Reviews: distribution across dates + distribution of reviews during the day
+
+### 2.6 Any correlation of year of production or time of day / date of review with ratings
+
+
+### 2.7 NB: Are the genres for each film consistent? Assume so, assume they've come from movies dataset. But check.
+If so, see if any correlation between number of different genres assigned to a film and the rating. 
+More genres = lower rating as a hypothesis?
+
+
+print(keep)
 
 ## 3. Results
 presents the modeling results and discusses the model performance
