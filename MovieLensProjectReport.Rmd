@@ -1,17 +1,23 @@
 ---
-title: "MoviesLens.org movie recommendation algorithm "
+title: "MoviesLens.org movie recommendation model "
 author: "Matthew Hale"
-date: "Jan-2024"
+date: "Feb-2024"
 output:
-  pdf_document: default
+  pdf_document: 
+    extra_dependencies: ["float"]
   html_document: default
+header-includes:
+- \usepackage{booktabs}
 urlcolor: blue
+always_allow_html: yes
 ---
 ```{r setup-options, include=FALSE}
-knitr::opts_chunk$set(echo=TRUE)
+knitr::opts_chunk$set(echo=TRUE, warning=FALSE, message=FALSE, comment=NA, fig.pos = "H", out.extra = "")
 ```
 
+
 ```{r data-load, include=FALSE}
+
 if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
 if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
 
@@ -72,16 +78,41 @@ edx <- rbind(edx, removed)
 rm(dl, ratings, movies, test_index, temp, movielens, removed)
 ```
 
+```{r load-libs, include=FALSE}
+
+#Load libraries
+if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(scales)) install.packages("scales", repos = "http://cran.us.r-project.org")
+if(!require(stringr)) install.packages("stringr", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(ggthemes)) install.packages("ggthemes", repos = "http://cran.us.r-project.org")
+if(!require(knitr)) install.packages("knitr", repos = "http://cran.us.r-project.org")
+if(!require(xtable)) install.packages("xtable", repos = "http://cran.us.r-project.org")
+#if(!require(kableExtra)) install.packages("kableExtra", repos = "http://cran.us.r-project.org")
+
+library(dplyr)
+library(scales)
+library(stringr)
+library(lubridate)
+library(ggthemes)
+library(knitr)
+library(xtable)
+#library(kableExtra)
+
+
+```
+
 
 ## 1. Introduction
-### Describe the dataset and summarizes the goal of the project and key steps that were performed
 
 ### 1a) Project Objective
 MovieLens.org is a website that asks users to rate movies they've watched from 0.5 to 5 stars, and based on that information will provide recommendations of other movies that user might like to watch
 
-To provide these recommendations a Machine Learning algorithm has been trained to predict the star rating a user will give to a specific movie, and return the movies with the highest predicted star ratings as recommendations.
+To provide these recommendations a Machine Learning algorithm has been trained on date the site collects to predict the star rating a user will give to each movie, and return the movies with the highest predicted star ratings as recommendations.
 
 The goal of this project is to train a new Machine Learning algorithm on a large dataset of movie ratings collected from a wide range of MovieLens.org users to predict the star rating each user might give a new film, and do so as accurately as possible.
+
+Applying such a recommender system in a commercial setting would be expected to have significant benefits in terms of customer satisfaction, retention, and therefore commercial performance.
 
 ### 1b) Initial Datasets
 
@@ -91,20 +122,21 @@ This data contains over 10 million movie ratings of 10,000 movies by 72,000 user
 
 ### 1c) Processed/Cleansed Datasets
 
-Initial processing/cleansing has been done to join the datasets together into a single flat file, reformat columns where required, and  randomly split the data into a training set called **edx** (90% of ratings on which to train the new ML algorithm) and a test set called **final_holdout_test** (10% of ratings which won't be involved in model development and will be used to test the performance of the final model produced).
+Initial processing/cleansing was done to join the datasets together into a single flat file, reformat columns where required, and  randomly split the data into a training set called **edx** (90% of ratings on which to train the new ML algorithm) and a test set called **final_holdout_test** (10% of ratings which won't be involved in model development and will be used to test the performance of the final model produced).
 
 Please see MovieLensProjectCode.R for the initial cleansing/processing script.
 
 The rowcounts for the two sets are below, showing the ~90/10 split.
 
 ```{r rowcnts, echo=FALSE}
-cat("Number of rows in training set edx =",nrow(edx))
-cat("Number of rows in test set final_holdout_test =",nrow(final_holdout_test))
+cat("Number of rows in training set edx =",format(nrow(edx), big.mark = ",", scientific = FALSE))
+cat("Number of rows in test set final_holdout_test =",format(nrow(final_holdout_test), big.mark = ",", scientific = FALSE))
+
 ```
 
 The 6 columns in the training and test datasets are per the below, listing the data type in each column and some sample entries:
 
-```{r, echo=FALSE}
+```{r edx-vars, echo=FALSE}
 edx_rnd <- edx %>% slice_sample(n=10) 
 tmp <- capture.output(str(edx_rnd))
 tmp2 <- data.frame(tmp[2:length(tmp)])
@@ -114,90 +146,1051 @@ tmp3 <- tmp2 %>% separate(col="AllInfo",into=c("v1","v2"),sep=":") %>%
          Type = substr(v2,2,4),
          Examples = substr(v2,6,100)) %>%
   select(Variable,Type, Examples)
-tmp3 %>% knitr::kable()
+tmp3 %>% knitr::kable(caption = "Variables in edx training dataset")
+```
+
+During the course of the exploratory data analysis further processing was done on the data to aid analysis and modelling. This included:
+
+* Splitting the title variable into two: one variable with the title excluding film year, one with the film year (called filmYear)
+
+* Creating the filmDecade variable using filmYear (1980s, 1990s etc)
+
+* Creating the ratingDate variable using the timestamp on the review (and removing the timestamp variable)
+
+* Creating Genres_Cnt variable, counting the number of genres associated with each movie per the genres variable
+
+* Adding a binary variable for each of the 19 genres in the dataset. So 'Comedy|Romance' would be marked as Comedy= TRUE, Romance = TRUE, and all other genres as false (e.g. Action=FALSE, Adventure=FALSE etc). 
+
+
+```{r data-processing, include=FALSE}
+
+#Additional Data Processing for Charts/Modelling
+################################################
+
+#split title into title and year; add date field for the review date
+edx_pr <- edx %>% mutate(filmYear = str_sub(title,-6,-1),
+                         title = str_sub(title,end=-7)) %>% 
+  mutate(filmYear = gsub('[()]','',filmYear),
+         ratingdate = as_datetime(timestamp)) %>%
+  mutate(filmDecade = paste0(floor(as.integer(filmYear)/10)*10,'s'),
+         Genres_Cnt = 1 + str_count(genres,"\\|")) %>%
+  select(-timestamp)
+
+#Split genres column out into separate columns
+edx_gnrs <- edx_pr %>% group_by(genres) %>% summarize(n=n()) %>%
+  separate(col=genres,into=c("G1","G2","G3","G4","G5","G6","G7","G8"), sep='\\|',fill="right") %>% select(-n)
+
+#Get unique list of all the separate genres
+edx_gnrs_vect<- as.vector(as.matrix(edx_gnrs))
+genrelist <- unique(edx_gnrs_vect[!is.na(edx_gnrs_vect)])    #remove NAs
+genrelist <- genrelist[genrelist != "(no genres listed)"]   #remove where no genres listed
+
+#Df of genres in data for presentation
+gnre_df <- as.data.frame(genrelist) 
+
+#Add binary variables for each genre. Loops through genres in the genre list and adds a variable with TRUE/FALSE depending
+#on whether the specific genre is listed in the genres variable
+m <- length(genrelist)
+for(n in 1:m){
+  newcol <- genrelist[n]
+  edx_pr[newcol] <- grepl(newcol, edx_pr$genres, fixed = TRUE)
+}
+
+rm(edx) #remove unprocessed edx set for disk mgmt
+
 ```
 
 
+### 1d) Modelling Methodology
 
-### 1d) Methodology
+After initial exploratory data analysis, the predictive model was developed using the edx set, with a number of linear models evaluated using that dataset. K-fold cross validation was conducted on all models to try and ensure the model produced would be 'generalisable' to new data. 
 
-After initial exploratory data analysis, the algorithm will be developed using the edx set, with a number of Machine Learning methods evaluated using that dataset to try and produce an accurate model that is 'generalisable' to new data. 
+The final, selected model was then applied to the final_holdout_test set, and evaluated using root mean squared error (RMSE) - a measure of the deviation between the ML algorithm's predictions and the actual responses of users in the test set. Achieving an RMSE as low as possible in the test set, and getting a closer alignment between predicted and actual ratings, is the ultimate goal of this project. For more see wikipedia [here](https://en.wikipedia.org/wiki/Root-mean-square_deviation)
 
-The final, selected model will then be applied to the final_holdout_test set, and evaluated primarily using root mean squared error (RMSE) - a measure of the deviation between the ML algorithm's predictions and the actual responses of users in the test set. For more see wikipedia [here](https://en.wikipedia.org/wiki/Root-mean-square_deviation)
+Whilst other metrics could be used to assess how good a model is, RMSE has a history in movie recommender systems - being the metric of choice for the Netflix challenge in 2006, for example. 
 
-
-## 2. Analysis
-explains the process and techniques used, including data cleaning, data exploration and visualization, insights gained, and your modeling approach
-
-This section covers the exploratory data analysis carried out and associated findings.
-
+## 2. Data Analysis
+The exploratory data analysis conducted is documented below. This primarily involved reviewing the distributions of the variables in the dataset and the movie ratings patterns across those variables, given the modelling task of predicting movie ratings. As part of this process, new variables were created for analysis and modelling, as described in section 1 above.
 
 ### 2.1 Data sparseness
-An initial plot of 100 randomly selected users, and the coverage of films they've reviewed suggests a sparse matrix, with each user unsurprisingly having only reviewed a small minority of the overall movies available.
+The first step in the process was to review the coverage in the dataset - i.e. how many user/movie combinations we have ratings for and how many gaps there are. 
 
-```{r, echo=FALSE}
-users <- sample(unique(edx$userId), 100)
-edx %>% filter(userId %in% users) %>% 
+The edx dataset contains the following number of unique users and unique movies:
+```{r usr-mov-cnts, echo=FALSE}
+#count distinct user and movies
+tmp_usrmov <- edx_pr %>% summarize(users = n_distinct(userId),
+                  movies = n_distinct(movieId))
+format(tmp_usrmov, big.mark = ",", scientific = FALSE)
+```
+
+If every user had rated every movie in the data, we would have a total ratings volume of:
+```{r cartesian-product, echo=FALSE}
+tmp_usrmov_tot <- tmp_usrmov %>% mutate(Combinations = users * movies) %>% select(Combinations)
+format(tmp_usrmov_tot, big.mark = ",", scientific = FALSE)
+```
+
+Given the number of ratings in the edx dataset is just over 9 million, the percentage coverage is therefore:
+```{r pct-coverage, echo=FALSE}
+tmp_usrmov_pct <- nrow(edx_pr) / tmp_usrmov_tot$Combinations
+percent(tmp_usrmov_pct, accuracy = 0.01)
+```
+This unsurprising result, that each user has only watched a small fraction of the movies out there, shows we have a sparse matrix with a lot of gaps.
+
+This can be visualised as follows by looking at 100 randomly selected users, and 100 randomly selected movies watched by this user group. The colour of each square indicates the star rating given by the given user for the given film, and no colour shows that the user has not rated the film.
+
+```{r heatmap-coverage, include=FALSE}
+if(!require(plotly)) install.packages("plotly", repos = "http://cran.us.r-project.org")
+library(plotly) 
+
+set.seed(1986, sample.kind="Rounding")         #set seed for random selection of users/movies
+
+#create matrix to plot
+users <- sample(unique(edx_pr$userId), 100)
+reshape <- edx_pr %>% filter(userId %in% users) %>% 
   select(userId, movieId, rating) %>%
-  mutate(rating = 1) %>%
   spread(movieId, rating) %>% select(sample(ncol(.), 100)) %>% 
-  as.matrix() %>% t(.) %>%
-  image(1:100, 1:100,. , xlab="Movies", ylab="Users")
-abline(h=0:100+0.5, v=0:100+0.5, col = "grey")
+  as.matrix() %>% t(.)
+
+#Initial plotly chart
+fig <- plot_ly(z = reshape, x=1:100, y=1:100, type = "heatmap",colorscale = "Bluered",colorbar = list(title = "Star Rating")) %>% 
+  layout(xaxis = list(title = "Movies",showgrid=FALSE,zeroline=FALSE),
+         yaxis=list(title="Users",showgrid=FALSE,zeroline=FALSE) )
+
+#Add horizontal line to plot as shapes - offset lines by 0.5 to frame the plotted square
+hlines <- function(y = 0, color = "gray") {
+  list(type = "line",
+       x0 = 0, x1 = 1, xref = "paper", y0 = y+0.5, y1 = y+0.5, 
+       line = list(color = color, width = 0.2))
+}
+#Repeat above 101 times for all the horizontal lines
+fig$x$layout$shapes <- lapply(0:100, hlines)
+
+
+#Add vertical line to plot as shapes - offset lines by 0.5 to frame the plotted square
+vlines <- function(x = 0, color = "gray") {
+  list(type = "line",
+       y0 = 0, y1 = 1, yref = "paper", x0 = x+0.5, x1 = x+0.5,
+       line = list(color = color, width = 0.2))
+}
+#Repeat above 101 times for all the vertical lines
+fig$x$layout$shapes[101:201] <- lapply(0:100, vlines)   #Adding 101 new shapes for each vertical line, in addition to horizontal ones
+
+#Save as png (plotly doesn't work well with pdf knit; need webshot, phantom_js, and the result still looked bad)
+p <- fig
+file = "fig.png"; format = "png"
+debug=verbose=safe=F
+b <- plotly_build(p)
+plotlyjs <- plotly:::plotlyjsBundle(b)
+plotlyjs_path <- file.path(plotlyjs$src$file, plotlyjs$script)
+if (!is.null(plotlyjs$package)) {
+  plotlyjs_path <- system.file(plotlyjs_path, package = plotlyjs$package)
+}
+tmp <- tempfile(fileext = ".json")
+cat(plotly:::to_JSON(b$x[c("data", "layout")]), file = tmp)
+args <- c("graph", tmp, "-o", file, "--format", 
+          format, "--plotlyjs", plotlyjs_path, if (debug) "--debug", 
+          if (verbose) "--verbose", if (safe) "--safe-mode")
+base::system(paste("orca", paste(args, collapse = " ")))
 
 ```
 
-### 2.2 Highest/Lowest Rated Movies and Most/Least Frequently Reviewed Movies
+```{r, echo=FALSE, fig.cap="100 Random Users' Ratings for 100 movies", out.width="100%"}
+knitr::include_graphics("fig.png")
+```
+Here we can see the large % of gaps where we don't have a rating for a movie from a given user.
+
+You can also start to see a number of other insights in the plot, which again are aligned with expectation: 
+
+1. from the more populated horizontal lines, you can see that there are some 'super users' in the dataset who have rated a lot more movies than others;
+2. some users seem to rate generally higher than other (a tendency for reds in the horizontal lines)
+3. from the more populated vertical lines you see that some films have a lot more reviews than others;
+4. some films look to be generally rated higher than others.
 
 
-Would expect the weakest algo performance for the movies with the least reviews
+### 2.2 Movie Analysis
 
-### 2.3 Highest/Lowest Rated Genres and distribution of vol of reviews for each genre (chart)
+#### 2.2.1 Most/Least Frequently Rated Movies
+We can confirm the view that some of the 10,677 movies in the dataset have a lot more reviews than others by plotting a histogram of the distribution of movie ratings.
 
-Would expect the weakest algo performance for the genres with the least reviews
+Understanding the differences in volume of ratings per movie is important, as we might expect more accurate predictions from our models where those predictions are backed by good volumes of data. And vice-versa, poorer predictions where we have a paucity of data.
+
+The histogram below clearly shows a much higher number of films with few ratings, and very few films with up to 30,000+ ratings. Note, the LHS chart is the full distribution, the RHS chart shows the pattern holding for films with up to 200 ratings, with most films having a lower volume of ratings:
+
+```{r Movie-Hists, echo=FALSE, fig.cap="Distribution of Ratings Volume per Movie", fig.show="hold", out.width="50%"}
+
+par(mar=c(4,4,.1,.1))
+
+edx_pr %>% group_by(movieId) %>% summarize(n=n()) %>% arrange(., desc(n)) %>% #filter(n>100) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins=50, fill="steelblue") +
+  ylab("Number of Movies") +
+  xlab("Number of Ratings") +
+  theme_economist() +
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)))
+
+edx_pr %>% group_by(movieId) %>% summarize(n=n()) %>% arrange(., desc(n)) %>% #filter(n>100) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins=200, fill="steelblue") + 
+  xlim(1,200) +
+  ylab("Number of Movies") +
+  xlab("Number of Ratings") +
+  theme_economist() +
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)))
+
+```
+
+The tables below show the top 10 most and bottom 10 movies in terms of ratings volume:
+
+```{r most-least-ratings, echo=FALSE, results='asis'}
+
+#Top 10 movies by volume of ratings 
+t1 <- edx_pr %>% select(title) %>% group_by(title) %>% 
+  summarize(ratingsVol = n()) %>% 
+  arrange(desc(ratingsVol)) %>% .[1:10,] %>%
+  mutate(title = substr(title,1,35)) %>% knitr::kable(format = "latex", booktabs = TRUE)
+
+#Bottom 10 movies by volume of ratings 
+t2 <- edx_pr %>% select(title) %>% group_by(title) %>% 
+  summarize(ratingsVol = n()) %>% 
+  arrange(ratingsVol) %>% .[1:10,] %>% 
+  mutate(title = substr(title,1,35)) %>% knitr::kable(format = "latex", booktabs = TRUE) 
+
+#latex to produce tables side by side
+cat(c("\\begin{table}[H]
+    \\begin{minipage}{.5\\linewidth}
+      \\caption{Movies with most ratings}
+      \\centering",
+        t1,
+    "\\end{minipage}%
+    \\begin{minipage}{.5\\linewidth}
+      \\centering
+        \\caption{Movies with least ratings}",
+        t2,
+    "\\end{minipage} 
+\\end{table}"
+))  
+```
+
+As you'd expect, the most reviewed films are Hollywood blockbusters, whereas the least reviewed films (a subset of the films with 1 rating) are probably not ones you're heard of:
+
+And the mean and median volume of ratings per movie is as below, with the large difference between mean and median indicating the skewing of the distribution. i.e. if you line up all the movies from least to most ratings, the mid-point movie has 122 ratings, but the overall mean is 842 ratings per movie, which really shows the outsize impact of the handful of blockbuster movies. 
+
+```{r mean-median-ratingsPerMovie, echo=FALSE}
+#Mean and Median vol of ratings per user
+ratingsPerMovie <- edx_pr %>% select(movieId) %>% group_by(movieId) %>% summarize(n=n()) %>% 
+  summarize(Mean_RatingsPerMovie = mean(n),Median_RatingsPerMovie = median(n)) %>% as.data.frame() %>% 
+  mutate(Mean_RatingsPerMovie = round(Mean_RatingsPerMovie,1))
+ratingsPerMovie
+```
+
+#### 2.2.2 Highest/Lowest Rated Movies
+
+In the data we can also start to see the unsurprising result that there is variance in the average rating given to each movie, with some movies generally seen to be better than others. 
+
+```{r rating-by-movie-dist, echo=FALSE, fig.cap="Distribution of Average Ratings per Movie", out.width="75%" , fig.align='center'}
+
+edx_pr %>% group_by(movieId) %>% summarize(averageRating = mean(rating)) %>% 
+  ggplot(aes(averageRating)) +
+  geom_histogram(bins = 30, fill = "steelblue") +
+  xlab("Average Rating") + 
+  ylab("Number of Movies") +
+  theme_economist(horizontal=TRUE) +
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)))  
+```
+
+The tables below give the best rated and worst rated movies that have at least 100 reviews:
+
+```{r best-worst-movies, echo=FALSE, results='asis'}
+
+#Top 10 rated movies (films with minimum 100 ratings) 
+t1 <- edx_pr %>% select(title,rating) %>% group_by(title) %>% 
+  summarize(ratingsVol = n(), Avgrating = mean(rating)) %>% 
+  mutate(Avgrating = round(Avgrating,2)) %>%
+  filter(ratingsVol >= 100) %>%
+  select(-ratingsVol) %>%
+  arrange(desc(Avgrating)) %>%  .[1:10,] %>%
+  mutate(title = substr(title,1,35)) %>% knitr::kable(format = "latex", booktabs = TRUE)
+
+#Bottom 10 rated movies (films with minimum 100 ratings) 
+t2 <- edx_pr %>% select(title,rating) %>% group_by(title) %>% 
+  summarize(ratingsVol = n(), Avgrating = mean(rating)) %>% 
+  mutate(Avgrating = round(Avgrating,2)) %>%
+  filter(ratingsVol >= 100) %>%
+  select(-ratingsVol) %>%
+  arrange(Avgrating) %>%  .[1:10,] %>%
+  mutate(title = substr(title,1,35)) %>% knitr::kable(format = "latex", booktabs = TRUE)
+
+#latex to produce tables side by side
+cat(c("\\begin{table}[H]
+    \\begin{minipage}{.5\\linewidth}
+      \\caption{Movies with highest ratings}
+      \\centering",
+        t1,
+    "\\end{minipage}%
+    \\begin{minipage}{.5\\linewidth}
+      \\centering
+        \\caption{Movies with lowest ratings}",
+        t2,
+    "\\end{minipage} 
+\\end{table}"
+))  
+```
+
+This is all looks aligned with expectation, with some films that always rank highly in best ever film lists featured in the top 10 ranking, and some less highly respected films in the bottom 10 - the Pokemon films in particular seem to have fared badly, taking 3 spots of the bottom 10.
+
+#### 2.2.3 Most/Least Rated Movie Genres, and Highest/Lowest Rated 
+We now come up a level and look at movies grouped into genres. Per the tables below, we can see that each movie can have multiple genres associated with it in the data, and we can start to see the most rated genre combinations and the highest/lowest rated.
+
+The total volume of genre combinations in the data is:
+
+```{r genre-combinations, echo=FALSE}
+#Overall number of genre combinations:
+tmp_gnre <- edx_pr %>% summarize(genres = n_distinct(genres))
+tmp_gnre
+```
+
+The top and bottom ten genre combinations (with at least 1000 ratings) are as follows:
+
+```{r best-worst-genres-combs, echo=FALSE, results='asis'}
+
+#Top 10 rated genre combinations (min 1000 ratings)
+t1 <- edx_pr %>% select(genres, rating) %>% group_by(genres) %>% summarize(AvgRating = mean(rating),cnt=n()) %>%
+  filter(cnt > 1000) %>%  select(-cnt) %>% arrange(desc(AvgRating)) %>% .[1:10,] %>%
+   mutate(genres = substr(genres,1,30),AvgRating = round(AvgRating,2)) %>% knitr::kable(format = "latex", booktabs = TRUE)
+
+#Bottom 10 rated genre combinations (min 1000 ratings)
+t2 <- edx_pr %>% select(genres, rating) %>% group_by(genres) %>% summarize(AvgRating = mean(rating),cnt=n()) %>%
+  filter(cnt > 1000) %>%  select(-cnt) %>% arrange(AvgRating) %>% .[1:10,] %>% 
+   mutate(genres = substr(genres,1,30),AvgRating = round(AvgRating,2)) %>% knitr::kable(format = "latex", booktabs = TRUE)
+
+#latex to produce tables side by side
+cat(c("\\begin{table}[H]
+    \\begin{minipage}{.5\\linewidth}
+      \\caption{Genre Combinations with highest ratings}
+      \\centering",
+        t1,
+    "\\end{minipage}%
+    \\begin{minipage}{.5\\linewidth}
+      \\centering
+        \\caption{Genre Combinations with lowest ratings}",
+        t2,
+    "\\end{minipage} 
+\\end{table}"
+))  
+```
 
 
-### 2.4 Movies by Year; distribution of reviews
+So we can start to see a preference in the set for Crime, Thrillers, Dramas. And Sci-Fi, Children's Films and Fantasy falling lower down the list.
 
-### 2.5 Timestamps of Reviews: distribution across dates + distribution of reviews during the day
+Taking things a step further and breaking out the genres field into binary variables, then looking at the ratings associated with each genre, we can get a clearer view. 
 
-### 2.6 Any correlation of year of production or time of day / date of review with ratings
+Note, given each movie can be assigned to more than one genre, the total volume of ratings in the chart below sums to more than the total number of ratings in the edx dataset.
+
+```{r ratings-vol-by-genre, echo=FALSE, fig.cap="Average Ratings and Ratings Volume per Genre", out.width="75%" , fig.align='center'}
+
+for(n in 1:m){
+  col <- genrelist[n]
+  tmp <- edx_pr %>% group_by_at(col) %>% summarize(avgRating = mean(rating), RatingsCount=n()) %>% mutate(Genre = col)
+  names(tmp)[names(tmp) == col] <- 'TrueOrFalse'
+  tmp <- tmp %>% filter(TrueOrFalse == TRUE) %>% select(-TrueOrFalse)
+  if (n==1){
+    genre_df <- tmp
+  } else {
+    genre_df <- rbind(genre_df,tmp)
+  }
+}
+
+genre_df %>%
+  ggplot(aes(group=1)) +
+  geom_bar(aes(reorder(Genre,-avgRating,sum), RatingsCount),stat="identity",fill="steelblue") +
+  geom_line(aes(Genre,avgRating/0.000001),color="red",size=1.5) +
+  scale_y_continuous(labels = scales::label_number_si(), sec.axis=sec_axis(~.*0.000001, name="Average Rating")) +
+  ylab("Volume of Ratings") +
+  xlab("Genres") +
+  theme_economist() +
+  theme(axis.text.y.left=element_text(color="steelblue"),
+        axis.text.y.right=element_text(color="red"),
+        axis.text.x = element_text(angle=90,hjust=1),
+        axis.title.y.left = element_text(color = "steelblue", margin = margin(t = 0, r = 10, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)),
+        axis.title.y.right = element_text(color = "red", margin = margin(t = 0, r = 0, b = 0, l = 10)))
+```
+
+From this new view using the binary variables, we can see that Drama, Comedy, Action and Thriller movies are the most rated, and the highest rated genres on average are Film-Noir and Documentary, although they have few ratings. Of genres with 1m ratings +, it's Drama and Crime that are the highest rated. 
+
+The worst rated on average are Horror and Sci-Fi movies.
+
+#### 2.2.4 Number of genres associated with a movie
+
+Another avenue of investigation around genres was whether the volume of genres associated with a given movie would have any bearing on ratings for that movie - with an initial speculative hypothesis being that more genres, and an identity crisis for the movie, might lead to lower ratings. 
+
+```{r genre-vol-rating,echo=FALSE, fig.cap="Average Rating and Ratings Volume by number of Genres associated with a Movie", out.width="75%" , fig.align='center'}
+edx_pr %>% group_by(Genres_Cnt) %>%
+  summarize(avgRating = mean(rating), n=n()) %>%
+  ggplot() +
+  geom_bar(aes(Genres_Cnt,n),stat="identity",fill="steelblue") +
+  geom_line(aes(Genres_Cnt,avgRating/0.000002),color="red",size=1.5) +
+  scale_y_continuous(labels = scales::label_number_si(), sec.axis=sec_axis(~.*0.000002, name="Average Rating")) +
+  scale_x_continuous(breaks = 1:8) +
+  ylab("Volume of Ratings") +
+  xlab("Number of genres") +
+  theme_economist() +
+  theme(axis.text.y.left=element_text(color="steelblue"),
+        axis.text.y.right=element_text(color="red"),
+        axis.title.y.left = element_text(color = "steelblue", margin = margin(t = 0, r = 10, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)),
+        axis.title.y.right = element_text(color = "red", margin = margin(t = 0, r = 0, b = 0, l = 10))) 
+```
+
+The visual above doesn't support the view that the number of genres linked to a film bears much relation to the rating given, but the genre preferences in the dataset certainly look like they could potentially be exploited in the modelling stage.
+
+#### 2.2.4 Distribution and Ratings of Movies by Movie Release Year
+One other piece of information we have about each movie is the year in which it was released. The chart below shows the distribution of movies by year, and the average ratings associated with each.
+
+```{r mov-by-yr, echo=FALSE, fig.cap="Distribution of Ratings and Average Rating by Movie Year", fig.show="hold", out.width="75%" , fig.align='center'}
+
+#Function to neaten x axis
+every_nth = function(n) {
+  return(function(x) {x[c(TRUE, rep(FALSE, n - 1))]})
+}
+
+par(mfrow=c(2,1), mar=c(4,4,.1,.1))
+
+#Plot volume of ratings by film Year
+edx_pr %>% select(filmYear) %>% group_by(filmYear) %>% summarize(n=n()) %>% 
+  ggplot(aes(x=filmYear,y=n)) +
+  geom_bar(stat="identity", fill="steelblue") +
+  scale_y_continuous(labels = scales::label_number_si()) +
+  scale_x_discrete(breaks = every_nth(n = 10)) +
+  xlab("Year of Film Release") + 
+  ylab("Number of Ratings") +
+  theme_economist(horizontal=TRUE) +
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0))) 
+
+#Plot film year vs average rating
+edx_pr %>% select(filmYear,rating) %>% mutate(filmYear = as.integer(filmYear)) %>%
+  group_by(filmYear) %>%
+  summarize(avgRating = mean(rating)) %>% 
+  ggplot(aes(filmYear,avgRating)) +
+  geom_point() +
+  geom_smooth() +
+  scale_x_continuous(breaks = seq(1915,2015,by=10)) +
+  xlab("Year of Film Release") + 
+  ylab("Average Film Rating") +
+  theme_economist() +
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0))) 
+
+```
+
+The chart shows a skewing of the ratings volume towards the 1980s, 1990s, and 2000s, with the 1990s in particular dominating.
+
+In terms of ratings, it's years in the 'Golden Age' of Hollywood that have higher movie ratings on average, dropping off from the 1960s onwards. 
+
+```{r mov-num-reviews, echo=FALSE, fig.cap="Average Ratings by Number of Ratings a Movie has had", out.width="75%" , fig.align='center'}
+
+#Rating vs Number of reviews per Movie
+tmp <- edx_pr %>% select(movieId, rating) %>% group_by(movieId) %>% summarize(ratingVol=n(), AvgRating = mean(rating)) %>% 
+  mutate(ratingVolGrp_tmp = cut(ratingVol, breaks=c(0,25, 50, 100,250,500,1000,2500, 5000,Inf),dig.lab=4)) %>% group_by(ratingVolGrp_tmp) %>%
+  summarize(Ratings = n(), Mean_Rating = mean(AvgRating)) %>% 
+  mutate(ratingVolGrp = str_replace_all(ratingVolGrp_tmp,"([\\(\\]])","")) %>%
+  mutate(ratingVolGrp = str_replace_all(ratingVolGrp,"([\\,])","-")) 
+tmp$ratingVolGrp <- factor(tmp$ratingVolGrp, levels = tmp$ratingVolGrp)  #lock in ordering for x-axis in plot
+tmp %>%
+  ggplot() +
+  geom_bar(aes(ratingVolGrp,Ratings),stat="identity",fill="steelblue") +
+  geom_line(aes(ratingVolGrp,Mean_Rating/0.002,group=1),color="red",size=1.5) +
+  scale_y_continuous(labels = scales::label_number_si(accuracy = 0.1), sec.axis=sec_axis(~.*0.002, name="Average Rating")) +
+  #  scale_x_discrete(labels=scales::label_number_si()) +
+  # scale_x_continuous(breaks = 1:8) +
+  ylab("Volume of Ratings") +
+  xlab("Rating Volumes per Movie") +
+  theme_economist() +
+  theme(axis.text.y.left=element_text(color="steelblue"),
+        axis.text.y.right=element_text(color="red"),
+        axis.title.y.left = element_text(color = "steelblue", margin = margin(t = 0, r = 10, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)),
+        axis.title.y.right = element_text(color = "red", margin = margin(t = 0, r = 0, b = 0, l = 10))) 
+
+```
+
+So interestingly there does appear to be a correlation - movies with a higher number of reviews tend to be better rated on the average than films with fewer reviews. 
+
+### 2.3 User Related
+
+#### 2.3.1 Distribution of Volume of Ratings per User
+
+Moving onto a focus on the 69,878 different users in the dataset, we can start by looking at the distributions of the number of ratings per user.
+
+Again, you'd expect to be able to make better predictions for users who have given you more information about their movie preferences through their ratings.
+
+The histograms below (LHS being the full distribution, RHS zooming in to those with under 200 ratings) shows most users having reviewed smaller volumes of films, with a handful of enthusiasts having rated thousands of movies. 
+
+```{r User-Hists, echo=FALSE, fig.cap="Distribution of Ratings Volume per User", fig.show="hold", out.width="50%"}
+
+par(mar=c(4,4,.1,.1))
+
+edx_pr %>% group_by(userId) %>% summarize(n=n()) %>% arrange(., desc(n)) %>% 
+  ggplot(aes(n)) +
+  geom_histogram(bins=100, fill="steelblue") +
+  ylab("Number of Users") +
+  xlab("Number of Ratings") +
+  theme_economist() +
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)))
+
+edx_pr %>% group_by(userId) %>% summarize(n=n()) %>% arrange(., desc(n)) %>% 
+  ggplot(aes(n)) +
+  geom_histogram(bins=100, fill="steelblue") +
+  xlim(1,200) +
+  ylab("Number of Users") +
+  xlab("Number of Ratings") +
+  theme_economist() +
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)))
+
+```
+
+This is clear from the tables below, which show the top and bottom ten users in terms of review volumes.
+
+```{r most-least-usr-ratings, echo=FALSE, results='asis'}
+
+#Top 10 users by volume of ratings 
+t1 <- edx_pr %>% select(userId) %>% group_by(userId) %>% 
+  summarize(ratingsVol = n()) %>% 
+  arrange(desc(ratingsVol)) %>% .[1:10,] %>% knitr::kable(format = "latex", booktabs = TRUE)
+
+#Bottom 10 users by volume of ratings 
+t2 <- edx_pr %>% select(userId) %>% group_by(userId) %>% 
+  summarize(ratingsVol = n()) %>% 
+  arrange(ratingsVol) %>% .[1:10,] %>% knitr::kable(format = "latex", booktabs = TRUE)
+
+#latex to produce tables side by side
+cat(c("\\begin{table}[H]
+    \\begin{minipage}{.5\\linewidth}
+      \\caption{Movies with most ratings}
+      \\centering",
+        t1,
+    "\\end{minipage}%
+    \\begin{minipage}{.5\\linewidth}
+      \\centering
+        \\caption{Movies with least ratings}",
+        t2,
+    "\\end{minipage} 
+\\end{table}"
+))  
+```
+
+And the mean and median volume of ratings per user is as below, with the difference between mean and median also indicating the skewing of the distribution (albeit to a lesser extent than the skewing of the ratings per movie distribution).
+
+```{r mean-median-ratingsPerUsr, echo=FALSE}
+#Mean and Median vol of ratings per user
+ratingsPerUser <- edx_pr %>% select(userId) %>% group_by(userId) %>% summarize(n=n()) %>% 
+  summarize(Mean_RatingsPerUser = mean(n),Median_RatingsPerUser = median(n)) %>% as.data.frame() %>% 
+  mutate(Mean_RatingsPerUser = round(Mean_RatingsPerUser,1))
+ratingsPerUser
+```
+
+#### 2.3.2 Distribution of Average Rating per User
+
+In terms of ratings, we can plot that distribution to see the unsurprising result that some users on average will give out higher ratings than others.
+
+```{r rating-by-usr-dist, echo=FALSE, fig.cap="Distribution of Average Ratings per User", out.width="75%" , fig.align='center'}
+
+#Distribution of Average Ratings per User Chart
+  #(Showing some users tend to rank higher/lower on average)
+edx_pr %>% group_by(userId) %>% summarize(averageRating = mean(rating)) %>% 
+  ggplot(aes(averageRating)) +
+    geom_histogram(bins = 30, fill = "steelblue") + 
+  xlab("Average Rating") + 
+  ylab("Number of Users") +
+    theme_economist(horizontal=TRUE) +
+    theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+          axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)))
+```
+
+#### 2.3.3 Date of rating vs Average Rating
+
+We have no information about the users in the data beyond their ratings for each movie they rated (no demographic information etc). We do, however, have date of their reviews, which we can review to see how it may relate to movie ratings.
+
+```{r usr-review-date, echo=FALSE, fig.cap="Average Ratings by Rating Week", out.width="75%" , fig.align='center'}
+edx_pr %>% select(ratingdate, rating) %>% mutate(ratingWeek = round_date(ratingdate,unit="week")) %>% 
+  group_by(ratingWeek) %>% summarize(avgRating = mean(rating)) %>% 
+  ggplot(aes(ratingWeek,avgRating)) +
+  geom_point() +
+  geom_smooth() +
+  scale_x_datetime(date_breaks = "1 year",date_labels = "%Y") +
+  xlab("Rating Week") + 
+  ylab("Average Film Rating") +
+  theme_economist() +
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0))) 
+```
+
+This shows that the ratings were given in the period from the mid-90s to the late 2000s, and there appears to be a general decline in the ratings from the mid-90s to the mid-00s, followed by a tick up as we move towards 2010.
+
+#### 2.3.4 Hour of rating vs Average Rating
+
+One other piece of information we have is the time of each rating. We can therefore plot this to see if this has any impact on ratings.
+
+```{r usr-review-hour, echo=FALSE, fig.cap="Average Ratings by Rating Hour of Day", out.width="75%" , fig.align='center'}
+#Hour of review in the day. Most ratings done in evening, but little impact on average ratings 
+edx_pr %>% select(ratingdate,rating) %>% mutate(ratingTime = hour(ratingdate)) %>% group_by(ratingTime) %>%
+  summarize(avgRating = mean(rating),n=n()) %>% 
+  ggplot() +
+  geom_bar(aes(ratingTime,n),stat="identity",fill="steelblue") +
+  geom_line(aes(ratingTime,avgRating/0.00001),color="red",size=1.5) +
+  scale_y_continuous(labels = scales::label_number_si(), sec.axis=sec_axis(~.*0.00001, name="Average Rating")) +
+  ylab("Volume of Ratings") +
+  xlab("Hour of Day") +
+  theme_economist() +
+  theme(axis.text.y.left=element_text(color="steelblue"),
+        axis.text.y.right=element_text(color="red"),
+        axis.title.y.left = element_text(color = "steelblue", margin = margin(t = 0, r = 10, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)),
+        axis.title.y.right = element_text(color = "red", margin = margin(t = 0, r = 0, b = 0, l = 10))) 
+```
+
+Whilst interesting to see the daily pattern of ratings volume (with most ratings being done in the evenings) there appears to be very little impact on the ratings given.
+
+#### 2.3.5 Days between Rating and User's first rating vs Average Rating
+
+The chart below now looks at the days between the rating being given and the first time the user rated any movie, to see if users start off more optimistic and become harsher critics over time. 
+
+```{r days-since-first-usr-rating, echo=FALSE, fig.cap="Average Ratings by Days since first user rating", out.width="75%" , fig.align='center'}
+#Days since user's first review 
+usr_dt <- edx_pr %>% select(c('userId','ratingdate')) %>% group_by(userId) %>% summarize(min_UsrRatingDate = min(ratingdate)) 
+edx_pr %>% select(c('userId','ratingdate','rating')) %>% left_join(usr_dt, by='userId') %>% 
+  mutate(DaysFromUserFirstReview = as.numeric(as.Date(ratingdate) - as.Date(min_UsrRatingDate))) %>% 
+  group_by(DaysFromUserFirstReview) %>% summarize(avgRating = mean(rating),n=n()) %>% 
+  ggplot(aes(DaysFromUserFirstReview,avgRating)) +
+  geom_point(color="steelblue") +
+  geom_smooth() +
+  scale_y_continuous(labels = scales::label_number_si()) +
+  ylab("Average Rating") +
+  xlab("Days since first user review") +
+  theme_economist() +
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0))) 
+```
+
+Again, this appears to have little impact on ratings at the aggregate level.
+
+#### 2.3.5 Days between Rating and Movie's first rating vs Average Rating
+
+The chart below now looks at the days between the rating being given by a specific user and the first time the movie was ever rated by any user. 
+
+```{r days-since-first-mov-rating, echo=FALSE, fig.cap="Average Ratings by Days since first movie rating", out.width="75%" , fig.align='center'}
+mov_dt <- edx_pr %>% select(c('movieId','ratingdate')) %>% group_by(movieId) %>% summarize(min_MovRatingDate = min(ratingdate)) 
+edx_pr %>% select(c('movieId','ratingdate','rating')) %>% left_join(mov_dt, by='movieId') %>% 
+  mutate(DaysFromMovieFirstReview = as.numeric(as.Date(ratingdate) - as.Date(min_MovRatingDate))) %>% 
+  group_by(DaysFromMovieFirstReview) %>% summarize(avgRating = mean(rating),n=n()) %>% 
+  ggplot(aes(DaysFromMovieFirstReview,avgRating)) +
+  geom_point(color="steelblue") +
+  geom_smooth() +
+  scale_y_continuous(labels = scales::label_number_si()) +
+  ylab("Average Rating") +
+  xlab("Days since first movie review") +
+  ylim(3,4) +
+  theme_economist() +
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0))) 
+```
+
+Overall beyond the spike on the RHS, which appears to be associated with limited volume given the increase in the spread of the data, there is limited evidence of a trend. You might expect higher ratings initially, if it's generally a movie's fans who are watching the movie first post release, and then a reversion to the mean. This looks like it may be happening in the first year to a small extent, but beyond that the pattern feels hard to explain.
+
+It should be remembered that the above ratings plots are only 2-dimensional though, and there may well be partial correlations once other factors are accounted for (in this case, things like the year of film release, given a good number of movies were released prior to the start of the rating window)
+
+#### 2.3.6 Volume of User's Reviews vs the Average Rating
+
+As well as when they rated, we also know how many films a user rated. The below groups together user with similar volumnes of reviews to understand if this impacts ratings given.
+
+```{r usr-num-reviews, echo=FALSE, fig.cap="Average ratings by number of movies a user has rated", out.width="75%" , fig.align='center'}
+
+#Rating vs Number of reviews per User
+tmp <- edx_pr %>% select(userId, rating) %>% group_by(userId) %>% summarize(ratingVol=n(), AvgRating = mean(rating)) %>% 
+  mutate(ratingVolGrp_tmp = cut(ratingVol, breaks=c(0,25,50,100,150,200,250,500,1000,Inf),dig.lab=4)) %>% group_by(ratingVolGrp_tmp) %>%
+summarize(Ratings = n(), Mean_Rating = mean(AvgRating)) %>% 
+  mutate(ratingVolGrp = str_replace_all(ratingVolGrp_tmp,"([\\(\\]])","")) %>%
+  mutate(ratingVolGrp = str_replace_all(ratingVolGrp,"([\\,])","-")) 
+tmp$ratingVolGrp <- factor(tmp$ratingVolGrp, levels = tmp$ratingVolGrp)  #lock in ordering for x-axis in plot
+tmp %>%
+  ggplot() +
+  geom_bar(aes(ratingVolGrp,Ratings),stat="identity",fill="steelblue") +
+  geom_line(aes(ratingVolGrp,Mean_Rating/0.00025,group=1),color="red",size=1.5) +
+  scale_y_continuous(labels = scales::label_number_si(), sec.axis=sec_axis(~.*0.00025, name="Average Rating")) +
+#  scale_x_discrete(labels=scales::label_number_si()) +
+ # scale_x_continuous(breaks = 1:8) +
+  ylab("Volume of Ratings") +
+  xlab("User Rating Volumes") +
+  theme_economist() +
+  theme(axis.text.y.left=element_text(color="steelblue"),
+        axis.text.y.right=element_text(color="red"),
+        axis.title.y.left = element_text(color = "steelblue", margin = margin(t = 0, r = 10, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)),
+        axis.title.y.right = element_text(color = "red", margin = margin(t = 0, r = 0, b = 0, l = 10))) 
+
+```
+
+Interestingly this does look like it may impact to an extent, with the super users who have rated several hundred movies or more tending to be harsher critics than those with fewer reviews. Or an alternative reading could that users with more ratings will have watched a broader range of movies, and have gone beyond the popular into the realms of the less popular, which (although not always the case) may be less popular for a reason.
+
+### 2.4 User and Movie Related: User's movie type preferences
+
+We can also look at specific users, and start to see their genre preferences and movie year preferences emerge. For example, if we select a specific user at random with over 500 ratings given, we can plot the ratings per genre and pull out their favourite films. We can also see if they appear to have a preference for movies from a certain era.
+
+```{r spr-usr-gnre-prefs, echo=FALSE, fig.cap="Genre ratings for chosen super user", out.width="75%" , fig.align='center'}
+#Choose a user with over 500 reviews at random
+set.seed(1535, sample.kind="Rounding")
+SuperUser <- edx_pr %>% select(userId) %>% group_by(userId) %>% summarize(n=n()) %>%
+  filter(n >= 500) %>% slice_sample(n=1) %>% .$userId
+
+SuperUserdf <- edx_pr %>% filter(userId == SuperUser) 
+
+#Genre ratings for randomly chosen super user 
+for(n in 1:m){
+  col <- genrelist[n]
+  tmp <- SuperUserdf %>% group_by_at(col) %>% summarize(avgRating = mean(rating), RatingsCount=n()) %>% mutate(Genre = col)
+  names(tmp)[names(tmp) == col] <- 'TrueOrFalse'
+  tmp <- tmp %>% filter(TrueOrFalse == TRUE) %>% select(-TrueOrFalse)
+  if (n==1){
+    genre_df_su <- tmp
+  } else {
+    genre_df_su <- rbind(genre_df_su,tmp)
+  }
+}
+
+genre_df_su %>%
+  ggplot(aes(group=1)) +
+  geom_bar(aes(reorder(Genre,-avgRating,sum), RatingsCount),stat="identity",fill="steelblue") +
+  geom_line(aes(Genre,avgRating/0.01),color="red",size=1.5) +
+  scale_y_continuous(labels = scales::label_number_si(), sec.axis=sec_axis(~.*0.01, name="Average Rating")) +
+  ylab("Volume of Ratings") +
+  xlab("Genres") +
+  theme_economist() +
+  theme(axis.text.y.left=element_text(color="steelblue"),
+        axis.text.y.right=element_text(color="red"),
+        axis.text.x = element_text(angle=90,hjust=1),
+        axis.title.y.left = element_text(color = "steelblue", margin = margin(t = 0, r = 10, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)),
+        axis.title.y.right = element_text(color = "red", margin = margin(t = 0, r = 0, b = 0, l = 10)))
 
 
-### 2.7 NB: Are the genres for each film consistent? Assume so, assume they've come from movies dataset. But check.
-If so, see if any correlation between number of different genres assigned to a film and the rating. 
-More genres = lower rating as a hypothesis?
+```
+
+So we can start to see the specific users preferences begin to appear from the chart above. They seem to be a low rater overall vs the whole user group first of all, but clearly have a distinct preference for Animation, Musicals and Children's movies - a pattern that looks quite different to what we saw for the whole user group, particularly for the Children's movie genre which ranked poorly overall.
+
+At the other end of the scale, they rank Film Noir - a polar opposite to the rating for the user group as a whole, although admittedly with a low volume of movies rated.
+
+If we pull out the top and bottom 40 movies for this user, we can see more information emerge:
+
+```{r super-user-top-bot-films, echo=FALSE, results='asis'}
+
+#Top 40 rated movies for same user 
+t1 <- SuperUserdf %>% select(title,rating) %>% group_by(title) %>% 
+  summarize(ratingsVol = n(), Avgrating = mean(rating)) %>% 
+  mutate(Avgrating = round(Avgrating,3)) %>%
+  select(-ratingsVol) %>%
+  arrange(desc(Avgrating)) %>%  .[1:40,] %>% 
+  mutate(title = substr(title,1,35)) %>% knitr::kable(format = "latex", booktabs = TRUE)
+
+#Bottom 40 rated movies for same user 
+t2 <- SuperUserdf %>% select(title,rating) %>% group_by(title) %>% 
+  summarize(ratingsVol = n(), Avgrating = mean(rating)) %>% 
+  mutate(Avgrating = round(Avgrating,3)) %>%
+  select(-ratingsVol) %>%
+  arrange(Avgrating) %>%  .[1:40,] %>% 
+  mutate(title = substr(title,1,35)) %>% knitr::kable(format = "latex", booktabs = TRUE)
+
+#latex to produce tables side by side
+cat(c("\\begin{table}[H]
+    \\begin{minipage}{.5\\linewidth}
+      \\caption{Movies with best ratings}
+      \\centering",
+        t1,
+    "\\end{minipage}%
+    \\begin{minipage}{.5\\linewidth}
+      \\centering
+        \\caption{Movies with worst ratings}",
+        t2,
+    "\\end{minipage} 
+\\end{table}"
+))  
+```
+
+So here we can see a good number of animated films given a 5 star rating: Beauty and the Beast, The Little Mermaid, Monsters Inc etc, as well as some other info not captured in the genre breakdowns; for instance there seems to be a soft spot for British films here too with the 5-star ratings for Bend it Like Beckham, Four Weddings, Casino Royale and Bridget Jones. And also the impact of franchises is visible, with the Lord of the Rings trilogy all rated 5-star.
+
+On the other hand, in the lowest rated films we can see a good number of comedies and Sci-Fi films - even respected films like Blade Runner getting a half star rating. The franchise effect is evident here as well - having rated Jaws, Jaws 2 and Jaws 3-D at half a star apiece, it's not surprising to see Jaws: The Revenge also faring poorly.
+
+## 3. Modelling Methodology and Results
+Having analysed the training dataset to improve understanding and to assess potential model drivers, the modelling process was undertaken to construct a prediction of how each user would rate movies they hadn't previously rated.
+
+### 3.1) Modelling Methodology
+A set of linear models was built to try and achieve an accurate predictive model without overfitting to the training data. Initial work was done using the processed edx training set as a whole, and k-fold cross validation was then done to get RMSE results more likely to be representative of the performance in the final holdout set.
+
+The 5 model variants trialled are:
+ 
+1. Using the simple mean rating across all ratings in the training set as a baseline
+
+2. Adding an average movie bias to reflect that some movies are better/worse ranked than the average movie
+
+3. Adding an average user effect to reflect some users generally rate higher/lower than average
+
+4. A regularized version of model 3, adding a penalty for users/movies with low rating volumes
+
+5. An amended version of model 3, adding user specific genre-preference biases - only genres rated 5 or more times by a given user alter the prediction, and the average of the user's biases across the genres referenced for a specific movie are used.
+
+### 3.2) Modelling Results
+
+The average RMSE in the validation sets when performing 5-fold cross validation, for each of the 5 models, are below:
+
+```{r cross-valid, echo=FALSE}
+k <- 5
+grp_index <- createFolds(y = edx_pr$rating, k = k, list = TRUE, returnTrain = FALSE)
+
+#Make sure no preds or biases in edx_pr before training models
+edx_pr <- edx_pr %>% select(-any_of(c('b_i','b_u','b_u_g','b_i_reg','b_u_reg','pred1','pred2','pred3','pred4','pred5')))
+
+#Loop through each of the k-folds; each time train on 80%, validate on 20%. Then collect average results in validation sets
+for(i in 1:k){
+  
+  #Clear up spare space
+  rm(tmp_train)
+  rm(tmp_valid)
+  gc()
+  
+  #Get the index for each cross validation valid vs train sets
+  if(i < 10 & k >= 10){
+    tmp_valid_index <- grp_index[[paste0("Fold0",i)]]
+  } else {
+    tmp_valid_index <- grp_index[[paste0("Fold",i)]]
+  }
+  
+  #filter to create cross validation valid vs train sets
+  tmp_valid <- edx_pr[tmp_valid_index,]
+  tmp_train <- edx_pr[-tmp_valid_index,]
+  
+  #Get rid of any movies or users in the validation set that aren't in the train set
+  tmp_valid <- tmp_valid %>% 
+    semi_join(tmp_train, by = "movieId") %>%
+    semi_join(tmp_train, by = "userId")
+  
+  #Use training sets for following model builds, then use models to predict in validation set
+  
+  ###
+  
+  #Model 1: Average for all films
+  mu <- mean(tmp_train$rating)   
+  tmp_valid <- tmp_valid %>% mutate(pred1 = mu)  #add into validation set
+  
+  #Model 2: Average for all films + movie effect
+  movie_avgs <- tmp_train %>%
+    group_by(movieId) %>%
+    summarize(b_i = mean(rating - mu)) #average difference in rating for a given movie vs all movies
+  tmp_valid <- tmp_valid %>% left_join(movie_avgs, by='movieId') %>%
+    mutate(pred2 = mu + b_i) #add b_i and 2nd model prediction into validation set
+  
+  #Model 3: Average for all films + movie effect + user effect
+  user_avgs <- tmp_train %>%
+    left_join(movie_avgs, by='movieId') %>%
+    group_by(userId) %>%
+    summarize(b_u = mean(rating - mu - b_i)) #average difference in rating for a given user 
+  tmp_valid <- tmp_valid %>% left_join(user_avgs, by='userId') %>%
+    mutate(pred3 = mu + b_i + b_u) #add b_i and 3rd model prediction into validation set
+    
+  #Model 4: Average for all films + movie effect + user effect, regularized (lambda=5, see below)
+  lambda <- 5  
+  movie_avgs_reg <- tmp_train %>%
+      group_by(movieId) %>%
+      summarize(b_i_reg = sum(rating - mu)/(n()+lambda))
+  user_avgs_reg <- tmp_train %>% 
+      left_join(movie_avgs_reg, by="movieId") %>%
+      group_by(userId) %>%
+      summarize(b_u_reg = sum(rating - b_i_reg - mu)/(n()+lambda))
+  tmp_valid <- tmp_valid %>% 
+      left_join(movie_avgs_reg, by = "movieId") %>%
+      left_join(user_avgs_reg, by = "userId") %>%
+      mutate(pred4 = mu + b_i_reg + b_u_reg) #add b_i_reg and 3rd model prediction into validation set
+
+  
+  #Model 5: model 3 + Genre effect per user. Min 5 genre ratings for the average to be used (set to zero if less than 5)
+  MinVol = 5
+  user_gnre_avgs <- user_avgs %>% select(userId)   #Get user IDs in train set
+  
+  #Loop through genres and create a set with each genre's bias for each user
+  for(x in genrelist){
+    user_gnre_avgs_tmp <- tmp_train %>% select(movieId,userId,x,rating) %>%
+      left_join(movie_avgs, by='movieId') %>%                             #to get b_i
+      left_join(user_avgs, by='userId') %>%                               #to get b_u
+      group_by_at(c('userId', x)) %>%                                     #group by user and genre
+      summarize(n=n(), b_u_g = mean(rating - mu - b_i - b_u)) %>%         #get bias for the genre
+      filter(get(x) == TRUE) %>%                                          #only retain figures for ratings related to the genre x
+      filter(n >= MinVol) %>% select(userId, b_u_g)                       #only retain where user gave 5 ratings for genre x 
+    
+    names(user_gnre_avgs_tmp)[names(user_gnre_avgs_tmp) == "b_u_g"] <- paste0(x,"_b_u_g") #change b_u_g var name to "Action_b_u_g" etc
+    
+    user_gnre_avgs <- user_gnre_avgs %>% left_join(user_gnre_avgs_tmp, by='userId') #Join onto the df for all genres
+    
+  }
+  
+  #replace all NAs with zeroes (fewer than minvol ratings for the genre, so give them zero bias)
+  user_gnre_avgs <- user_gnre_avgs %>% replace(is.na(.), 0)
+  
+  #Calc the overall average bias given the genres of each movie for a given user in the validation set
+  user_gnre_avgs_fin <- tmp_valid %>% select(c('userId', 'movieId', 'Action', 'Adventure', 'Animation', 'Children', 'Comedy', 'Crime', 
+                                     'Documentary', 'Drama', 'Fantasy', 'Film-Noir', 'Horror', 'IMAX', 'Musical', 'Mystery', 
+                                     'Romance', 'Sci-Fi', 'Thriller', 'War', 'Western')) %>% mutate() %>% 
+    left_join(user_gnre_avgs,by='userId') %>% rename(FilmNoir = "Film-Noir", SciFi= "Sci-Fi",
+                                                     FilmNoir_b_u_g = "Film-Noir_b_u_g", SciFi_b_u_g= "Sci-Fi_b_u_g") %>%
+    mutate(b_u_g_num = Action*Action_b_u_g + Adventure*Adventure_b_u_g + Animation*Animation_b_u_g +
+             Children*Children_b_u_g + Comedy*Comedy_b_u_g + Crime*Crime_b_u_g + Documentary*Documentary_b_u_g + 
+             Drama*Drama_b_u_g + Fantasy*Fantasy_b_u_g +
+             FilmNoir*FilmNoir_b_u_g + Horror*Horror_b_u_g + IMAX*IMAX_b_u_g +
+             Musical*Musical_b_u_g + Mystery*Mystery_b_u_g + Romance*Romance_b_u_g +
+             SciFi*SciFi_b_u_g + Thriller*Thriller_b_u_g + War*War_b_u_g +Western*Western_b_u_g ,
+           b_u_g_denom = rowSums(across(c(Action, Adventure, Animation, Children, Comedy, Crime, Documentary, Drama, Fantasy, 
+                                          FilmNoir, Horror, IMAX, Musical, Mystery, Romance, SciFi, Thriller, 
+                                          War, Western)))) %>% 
+    mutate(b_u_g = b_u_g_num / b_u_g_denom) %>% select(userId, movieId,b_u_g)
+  
+  
+  #Join the genre biases onto the validation dataset and reset handful of NAs for one movie without genre to zero bias
+  tmp_valid <- tmp_valid %>% left_join(user_gnre_avgs_fin, by=c('userId','movieId')) %>% 
+    mutate(b_u_g = ifelse(is.na(b_u_g), 0, b_u_g)) %>% mutate(pred5 = mu + b_i + b_u + b_u_g)
+  
+  ###
+  
+  #Stock the RMSEs for valid set in a var for each model, and stock in df
+  rmse1_tmp <- RMSE(tmp_valid$rating, tmp_valid$pred1)
+  rmse2_tmp <- RMSE(tmp_valid$rating, tmp_valid$pred2)
+  rmse3_tmp <- RMSE(tmp_valid$rating, tmp_valid$pred3)
+  rmse4_tmp <- RMSE(tmp_valid$rating, tmp_valid$pred4)
+  rmse5_tmp <- RMSE(tmp_valid$rating, tmp_valid$pred5)
+  
+  rmse_tmp_df <- rbind(data_frame(Model = 1, RMSE = rmse1_tmp),
+                       data_frame(Model = 2, RMSE = rmse2_tmp),
+                       data_frame(Model = 3, RMSE = rmse3_tmp),
+                       data_frame(Model = 4, RMSE = rmse4_tmp),
+                       data_frame(Model = 5, RMSE = rmse5_tmp)
+  ) %>% mutate(ith_fold = i)
+  
+  #Create a table to stock the RMSE from each of the k cross validation steps
+  #if first cycle, create the df. For all other cycles bind to the existing table.
+  if(i==1){
+    rmse_tmp_df_all <- rmse_tmp_df
+  }
+  else{
+    rmse_tmp_df_all <- rbind(rmse_tmp_df_all, rmse_tmp_df)
+  }
+  
+  #For the last cycle create a df and stock the mean RMSE from the k validation sets
+  if(i==k){
+    rmse_results <- rmse_tmp_df_all %>% group_by(Model) %>% summarize(RMSE = mean(RMSE))
+  }
+}
+
+rmse_results %>% knitr::kable(caption = "Average RMSE from validation sets in 5-Fold Cross Validation") #show rmse results
+```
+
+Given the result in the cross validation, model 5 was chosen as the best model of those trialled. Having selected model 5, the final holdout test set was then used for the first time in the project as the acid test of the model's performance. The final RMSE using the test set is given below.
+
+```{r final-result, echo=FALSE}
+final_holdout_test_pr <- final_holdout_test %>% mutate(filmYear = str_sub(title,-6,-1),
+                         title = str_sub(title,end=-7)) %>% 
+  mutate(filmYear = gsub('[()]','',filmYear),
+         ratingdate = as_datetime(timestamp)) %>%
+  mutate(filmDecade = paste0(floor(as.integer(filmYear)/10)*10,'s'),
+         Genres_Cnt = 1 + str_count(genres,"\\|")) %>%
+  select(-timestamp)
+
+for(n in 1:m){
+  newcol <- genrelist[n]
+  final_holdout_test_pr[newcol] <- grepl(newcol, final_holdout_test_pr$genres, fixed = TRUE)
+}
+
+rm(final_holdout_test) #remove unprocessed edx set for disk mgmt
 
 
-print(keep)
+#Get final model params from full edx_pr set
+MinVol = 5
 
-## 3. Results
-presents the modeling results and discusses the model performance
+mu <- mean(edx_pr$rating)  
+movie_avgs <- edx_pr %>%
+  group_by(movieId) %>%
+  summarize(b_i = mean(rating - mu))
+user_avgs <- edx_pr %>%
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+
+user_gnre_avgs <- user_avgs %>% select(userId)   #Get user IDs in train set
+
+#Loop through genres and create a set with each genre's bias for each user
+for(x in genrelist){
+  user_gnre_avgs_tmp <- edx_pr %>% select(movieId,userId,x,rating) %>%
+    left_join(movie_avgs, by='movieId') %>%                             #to get b_i
+    left_join(user_avgs, by='userId') %>%                               #to get b_u
+    group_by_at(c('userId', x)) %>%                                     #group by user and genre
+    summarize(n=n(), b_u_g = mean(rating - mu - b_i - b_u)) %>%         #get bias for the genre
+    filter(get(x) == TRUE) %>%                                          #only retain figures for ratings related to the genre x
+    filter(n >= MinVol) %>% select(userId, b_u_g)                       #only retain where user gave 5 ratings for genre x 
+  
+  names(user_gnre_avgs_tmp)[names(user_gnre_avgs_tmp) == "b_u_g"] <- paste0(x,"_b_u_g") #change b_u_g var name to "Action_b_u_g" etc
+  
+  user_gnre_avgs <- user_gnre_avgs %>% left_join(user_gnre_avgs_tmp, by='userId') #Join onto the df for all genres
+  
+}
+
+#replace all NAs with zeroes (fewer than minvol ratings for the genre, so give them zero bias)
+user_gnre_avgs <- user_gnre_avgs %>% replace(is.na(.), 0)
+
+#Calc the overall average bias given the genres of each movie for a given user in the validation set
+user_gnre_avgs_fin <- final_holdout_test_pr %>% select(c('userId', 'movieId', 'Action', 'Adventure', 'Animation', 'Children', 'Comedy', 'Crime', 
+                                             'Documentary', 'Drama', 'Fantasy', 'Film-Noir', 'Horror', 'IMAX', 'Musical', 'Mystery', 
+                                             'Romance', 'Sci-Fi', 'Thriller', 'War', 'Western')) %>% mutate() %>% 
+  left_join(user_gnre_avgs,by='userId') %>% rename(FilmNoir = "Film-Noir", SciFi= "Sci-Fi",
+                                                   FilmNoir_b_u_g = "Film-Noir_b_u_g", SciFi_b_u_g= "Sci-Fi_b_u_g") %>%
+  mutate(b_u_g_num = Action*Action_b_u_g + Adventure*Adventure_b_u_g + Animation*Animation_b_u_g +
+           Children*Children_b_u_g + Comedy*Comedy_b_u_g + Crime*Crime_b_u_g + Documentary*Documentary_b_u_g + 
+           Drama*Drama_b_u_g + Fantasy*Fantasy_b_u_g +
+           FilmNoir*FilmNoir_b_u_g + Horror*Horror_b_u_g + IMAX*IMAX_b_u_g +
+           Musical*Musical_b_u_g + Mystery*Mystery_b_u_g + Romance*Romance_b_u_g +
+           SciFi*SciFi_b_u_g + Thriller*Thriller_b_u_g + War*War_b_u_g +Western*Western_b_u_g ,
+         b_u_g_denom = rowSums(across(c(Action, Adventure, Animation, Children, Comedy, Crime, Documentary, Drama, Fantasy, 
+                                        FilmNoir, Horror, IMAX, Musical, Mystery, Romance, SciFi, Thriller, 
+                                        War, Western)))) %>% 
+  mutate(b_u_g = b_u_g_num / b_u_g_denom) %>% select(userId, movieId,b_u_g)
+
+
+#Join the genre biases onto the test dataset and reset handful of NAs for one movie without genre to zero bias
+final_holdout_test_pr <- final_holdout_test_pr %>% 
+  left_join(movie_avgs,by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(user_gnre_avgs_fin, by=c('userId','movieId')) %>% 
+  mutate(b_u_g = ifelse(is.na(b_u_g), 0, b_u_g)) %>% mutate(pred5 = mu + b_i + b_u + b_u_g)
+
+#Calculate final RMSE in test set
+RMSE(final_holdout_test_pr$pred5,final_holdout_test_pr$rating)
+```
+
 
 ## 4. Conclusion
- a brief summary of the report, its limitations and future work
- 
- 
-### Tips - DELETE BEFORE SUBMISSION
-* It is recommended to submit a GitHub or similar link in addition to or instead of uploading your files to the edX platform. Please make sure your repository is not set to private. 
+The model appears to give a good prediction by capturing the impact of the average movie rating, the deviation from the overall average for each movie, the deviation from the average for each user, and user-specific genre preferences.
 
-*Can I just use the same code/approach from course 8 for the MovieLens project?
+With more time and resources, the following are potential avenues for further investigation:
 
-You are certainly more than welcome to use the code from the previous course as a starting point. Note that you are expected to go beyond the models previously shown though; it is not enough to simply copy the code or follow the same approach and submit your report without building upon it. It's up to you to include the previous code or not, but most learners do and it helps provide context and a starting point for your report. Additions to the previously shown models can include extra biases (e.g., genre information) or techniques such as matrix factorization, or even completely different modeling techniques (i.e., not linear regression). 
+1. Regularizing the chosen model. Whilst a minimum volume of 5 genre-specific ratings was used as a threshold for inclusion in the final model, which does add a regularizing effect, this hyperparameter could be selected via k-fold cross validation, or alternatively a penalty term could be added into the objective function when minimising root mean squared error, per model 4
 
+2. The addition of other effects could be assessed such as user-specific movie year preference
 
-* What is the goal of your project? Why is this project important to do and why should people care about it?
-* Have clear report sections/headings.
-* Give enough background about the subject matter and dataset for people to understand. I recommend having a list or table of the dataset variables and their definitions.
-* It's not enough to just show code and output without any text explanations. Explain any insights gained and your thought process throughout.
-* Why did you choose to take X approach to handle Y task/issue? What are the pros and cons of it? What alternatives exist?
-* Graders do not have the opportunity to discuss your project with you, and can only use what you provide in your report. I recommend providing more detail and explanations than risk providing too little and being penalized.
-* Consider hiding some code chunks or messages, as some are not helpful and make the report unnecessarily long. An example is the messages from loading packages.
-* Readers should not have to go back and forth between your PDF report and the Rmd/R files to understand what is happening and why.
-* Be mindful of data leakage. Do not use information from the outcome or from the test set when processing your data and training your models. Check that the variables you want to use are actually available at the time of prediction for your use case. Some values are only known after the event happens and thus shouldn't be used.
-* It can be nice to have a baseline to compare your models to, such as randomly guessing, the mean value from the training set, or a simple rule based system based on domain knowledge/EDA.
-* It is recommended to start with simple models before moving onto more complex ones.
-* What metric(s) did you choose and why? What does the metric mean in the context of your project (e.g. what does a RMSE of 5 mean, and can that be considered good or bad)? Does your model perform better/worse on certain subgroups? For classification projects, is the "cost" of a false positive vs false negative the same? What if you adjusted the decision threshold (not using the default of 0.5)?
-* It can be nice to have a table of your models and their metrics at the end of your modeling section so the results are together in one place for easy comparison.
-* What kind of impact or value can this project bring (e.g. increase revenue, decrease costs, save time, improve user/customer satisfaction, etc.)?
-* What would you do differently or add onto your project if you had more or better data, more time, more computational power, etc.?
+3. Other groupings of movies beyond genre could be assessed using matrix factorisation; this may reveal other structures in the data such as user preferences for specific franchises (e.g. Harry Potter, Lord of the Rings etc), or blockbusters, or superhero movies etc.
+
+It would also be preferable to continue investigating with more than 8gb RAM to give more freedom to investigate other model structures or drivers - managing memory issues (e.g. through breaking the data up into chunks etc) was a significant issue in the course of this project.
+
+Finally, whilst trying to utilise the available data to build an effective model, there are numerous other personal attributes which you'd expect would correlate with a user's preference for certain movies. Adding richer demographic data into the modelling set may well also be an avenue to improved model performance.
+
+Overall however, the final model presented here does give a significant enhancement in accuracy versus a naive movie averages approach, and the benefits of improved prediction in a commercial context is likely to be higher customer satisfaction and higher retention, which would be expected to drive commercial performance.
+
