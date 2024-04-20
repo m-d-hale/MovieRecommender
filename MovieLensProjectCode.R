@@ -88,6 +88,7 @@ library(stringr)
 library(tidyverse)
 library(caret)
 library(lubridate)
+library(ggplot2)
 library(ggthemes)
 #library(kableExtra)
 library(float)
@@ -467,6 +468,7 @@ edx_pr %>% group_by(userId) %>% summarize(n=n()) %>% arrange(., desc(n)) %>%
   theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
         axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)))
 
+#Same histogram, but focusing in on reviewers with up to 200 reviews
 edx_pr %>% group_by(userId) %>% summarize(n=n()) %>% arrange(., desc(n)) %>% 
   ggplot(aes(n)) +
   geom_histogram(bins=100, fill="steelblue") +
@@ -1185,32 +1187,4 @@ final_holdout_test_pr <- final_holdout_test_pr %>%
 #Calculate final RMSE in test set
 RMSE(final_holdout_test_pr$pred5,final_holdout_test_pr$rating)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Distribution of Ratings
-##########################
-#Overall Distribution of Ratings Table and Chart
-cntsbyrating <- edx_pr %>% group_by(rating) %>% summarize(n = n())
-cntsbyrating 
-edx_pr %>% group_by(rating) %>% summarize(n=n()) %>% 
-  ggplot(aes(x=rating,y=n)) +
-  geom_bar(stat="identity", fill="steelblue") +
-  scale_y_continuous(labels = scales::label_number_si()) +
-  #scale_x_discrete(breaks = every_nth(n = 5)) +
-  xlab("Rating") + 
-  ylab("Volume") +
-  theme_economist(horizontal=TRUE) +
-  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
-        axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0))) 
 

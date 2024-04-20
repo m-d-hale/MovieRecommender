@@ -203,13 +203,18 @@ rm(edx) #remove unprocessed edx set for disk mgmt
 
 ### 1d) Modelling Methodology
 
-After initial exploratory data analysis, the predictive model was developed using the edx set, with a number of linear models evaluated using that dataset. K-fold cross validation was conducted on all models to try and ensure the model produced would be 'generalisable' to new data. 
+After initial exploratory data analysis, the predictive model was developed using the edx set. This was based on a matrix factorisation approach - which is a common method for building recommender systems, and looked to predict the star rating a user would give to any given movie.
 
-The final, selected model was then applied to the final_holdout_test set, and evaluated using root mean squared error (RMSE) - a measure of the deviation between the ML algorithm's predictions and the actual responses of users in the test set. Achieving an RMSE as low as possible in the test set, and getting a closer alignment between predicted and actual ratings, is the ultimate goal of this project. For more see wikipedia [here](https://en.wikipedia.org/wiki/Root-mean-square_deviation)
+Initially a simple model was built using the overall mean rating in the training set as the prediction. This was then developed to add a bias for each movie's rating vs the overall average movie rating (to account for some movies being better/worse than others on aggregate), and developed again to add a user bias to account for differences in each user's rating relative to the mean ratings for the movies they'd rated (to account for some users generally giving higher scores or lower scores than others). A regularized version of this was built to account for the undue influence of users and movies with low ratings volumes. 
 
-Whilst other metrics could be used to assess how good a model is, RMSE has a history in movie recommender systems - being the metric of choice for the Netflix challenge in 2006, for example. 
+Finally, user-level genre preferences were added to the model (if a minimum volume of ratings were available) to account for some users preferring sci-fi or adventure movies in general vs romance for example.
 
-## 2. Data Analysis
+For each of the models, K-fold cross validation was conducted and the average Root Mean Squared Error (RMSE) in the validation sets calculated to try and get a good sense for the model's likely performance in previously unseen data. RMSE is a measure of the deviation between the ML algorithm's predicted star ratings and the actual star ratings given, and has a history of use in movie recommender systems - being the metric of choice for the Netflix challenge in 2006, for example. For more see wikipedia [here](https://en.wikipedia.org/wiki/Root-mean-square_deviation)
+
+The final selected model based on the training process was then applied to the final_holdout_test set. Achieving an RMSE as low as possible in the test set, and getting a closer alignment between predicted and actual ratings, is the ultimate goal of this project. 
+
+
+## 2. Methods/Analysis
 The exploratory data analysis conducted is documented below. This primarily involved reviewing the distributions of the variables in the dataset and the movie ratings patterns across those variables, given the modelling task of predicting movie ratings. As part of this process, new variables were created for analysis and modelling, as described in section 1 above.
 
 ### 2.1 Data sparseness
@@ -943,7 +948,7 @@ The 5 model variants trialled are:
 
 5. An amended version of model 3, adding user specific genre-preference biases - only genres rated 5 or more times by a given user alter the prediction, and the average of the user's biases across the genres referenced for a specific movie are used.
 
-### 3.2) Modelling Results
+### 3.2) Modelling Results in Validation Sets (5-fold cross validation using training data)
 
 The average RMSE in the validation sets when performing 5-fold cross validation, for each of the 5 models, are below:
 
@@ -1028,7 +1033,7 @@ for(i in 1:k){
       group_by_at(c('userId', x)) %>%                                     #group by user and genre
       summarize(n=n(), b_u_g = mean(rating - mu - b_i - b_u)) %>%         #get bias for the genre
       filter(get(x) == TRUE) %>%                                          #only retain figures for ratings related to the genre x
-      filter(n >= MinVol) %>% select(userId, b_u_g)                       #only retain where user gave 5 ratings for genre x 
+      filter(n >= MinVol) %>% select(userId, b_u_g)                       #only retain where user gave 5+ ratings for genre x 
     
     names(user_gnre_avgs_tmp)[names(user_gnre_avgs_tmp) == "b_u_g"] <- paste0(x,"_b_u_g") #change b_u_g var name to "Action_b_u_g" etc
     
@@ -1095,7 +1100,13 @@ for(i in 1:k){
 rmse_results %>% knitr::kable(caption = "Average RMSE from validation sets in 5-Fold Cross Validation") #show rmse results
 ```
 
-Given the result in the cross validation, model 5 was chosen as the best model of those trialled. Having selected model 5, the final holdout test set was then used for the first time in the project as the acid test of the model's performance. The final RMSE using the test set is given below.
+### 3.3) Final Result on the Test Set
+
+Given the results in the cross validation of the 5 different models, model 5 was chosen as the best model. 
+
+Having selected model 5, the final holdout test set was then used for the first time in the project as the acid test of the model's performance. 
+
+The final RMSE using the test set is given below.
 
 ```{r final-result, echo=FALSE}
 final_holdout_test_pr <- final_holdout_test %>% mutate(filmYear = str_sub(title,-6,-1),
@@ -1173,7 +1184,8 @@ final_holdout_test_pr <- final_holdout_test_pr %>%
   mutate(b_u_g = ifelse(is.na(b_u_g), 0, b_u_g)) %>% mutate(pred5 = mu + b_i + b_u + b_u_g)
 
 #Calculate final RMSE in test set
-RMSE(final_holdout_test_pr$pred5,final_holdout_test_pr$rating)
+cat("RMSE of model 5 applied to the test set =",RMSE(final_holdout_test_pr$pred5,final_holdout_test_pr$rating))
+
 ```
 
 
@@ -1193,4 +1205,12 @@ It would also be preferable to continue investigating with more than 8gb RAM to 
 Finally, whilst trying to utilise the available data to build an effective model, there are numerous other personal attributes which you'd expect would correlate with a user's preference for certain movies. Adding richer demographic data into the modelling set may well also be an avenue to improved model performance.
 
 Overall however, the final model presented here does give a significant enhancement in accuracy versus a naive movie averages approach, and the benefits of improved prediction in a commercial context is likely to be higher customer satisfaction and higher retention, which would be expected to drive commercial performance.
+
+
+## Appendix: References
+
+* The github repository for this project can be found at [github.com/m-d-hale/MovieRecommender](https://github.com/m-d-hale/MovieRecommender)
+
+* The MovieLens data has been sourced from [grouplens.org/datasets/movielens/10m/](https://grouplens.org/datasets/movielens/10m/)
+
 
